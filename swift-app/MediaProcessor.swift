@@ -164,20 +164,27 @@ enum MediaProcessor {
         }
         
         // ── Video Samples kopieren ──
+        // WICHTIG: requestMediaDataWhenReady ruft den Callback mehrfach auf.
+        // Wenn isReadyForMoreMediaData false wird (Puffer voll), muss der Callback
+        // einfach zurückkehren – er wird automatisch erneut aufgerufen.
+        // Die Continuation darf nur EINMAL resumed werden (wenn alle Samples gelesen sind).
         nonisolated(unsafe) let safeVideoInput = videoWriterInput
         nonisolated(unsafe) let safeVideoOutput = videoReaderOutput
         
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             safeVideoInput.requestMediaDataWhenReady(on: DispatchQueue(label: "video.write")) {
                 while safeVideoInput.isReadyForMoreMediaData {
-                    if let sampleBuffer = safeVideoOutput.copyNextSampleBuffer() {
-                        safeVideoInput.append(sampleBuffer)
-                    } else {
+                    guard let sampleBuffer = safeVideoOutput.copyNextSampleBuffer() else {
+                        // Alle Video-Samples wurden gelesen → fertig
                         safeVideoInput.markAsFinished()
                         continuation.resume()
                         return
                     }
+                    safeVideoInput.append(sampleBuffer)
                 }
+                // isReadyForMoreMediaData == false → Puffer voll.
+                // Einfach zurückkehren. Der Callback wird erneut aufgerufen,
+                // sobald der Writer wieder bereit ist.
             }
         }
         
@@ -189,14 +196,17 @@ enum MediaProcessor {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                 safeAudioInput.requestMediaDataWhenReady(on: DispatchQueue(label: "audio.write")) {
                     while safeAudioInput.isReadyForMoreMediaData {
-                        if let sampleBuffer = safeAudioOutput.copyNextSampleBuffer() {
-                            safeAudioInput.append(sampleBuffer)
-                        } else {
+                        guard let sampleBuffer = safeAudioOutput.copyNextSampleBuffer() else {
+                            // Alle Audio-Samples wurden gelesen → fertig
                             safeAudioInput.markAsFinished()
                             continuation.resume()
                             return
                         }
+                        safeAudioInput.append(sampleBuffer)
                     }
+                    // isReadyForMoreMediaData == false → Puffer voll.
+                    // Einfach zurückkehren. Der Callback wird erneut aufgerufen,
+                    // sobald der Writer wieder bereit ist.
                 }
             }
         }
