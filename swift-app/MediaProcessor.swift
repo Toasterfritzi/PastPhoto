@@ -163,50 +163,51 @@ enum MediaProcessor {
             writer.startSession(atSourceTime: .zero)
         }
         
-        // ── Video Samples kopieren ──
-        // WICHTIG: requestMediaDataWhenReady ruft den Callback mehrfach auf.
-        // Wenn isReadyForMoreMediaData false wird (Puffer voll), muss der Callback
-        // einfach zurückkehren – er wird automatisch erneut aufgerufen.
-        // Die Continuation darf nur EINMAL resumed werden (wenn alle Samples gelesen sind).
-        nonisolated(unsafe) let safeVideoInput = videoWriterInput
-        nonisolated(unsafe) let safeVideoOutput = videoReaderOutput
+        // ── Video und Audio Samples parallel kopieren ──
+        // WICHTIG: AVAssetWriter puffert nur eine begrenzte Menge an Daten pro Track.
+        // Wenn man erst das komplette Video und dann das komplette Audio schreibt,
+        // blockiert AVAssetWriter bei langen Videos ("interleaving deadlock"), 
+        // weil die Audio-Spur zu weit hinterherhinkt.
+        // Daher MÜSSEN beide Tracks gleichzeitig (concurrently) verarbeitet werden!
         
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            safeVideoInput.requestMediaDataWhenReady(on: DispatchQueue(label: "video.write")) {
-                while safeVideoInput.isReadyForMoreMediaData {
-                    guard let sampleBuffer = safeVideoOutput.copyNextSampleBuffer() else {
-                        // Alle Video-Samples wurden gelesen → fertig
-                        safeVideoInput.markAsFinished()
-                        continuation.resume()
-                        return
-                    }
-                    safeVideoInput.append(sampleBuffer)
-                }
-                // isReadyForMoreMediaData == false → Puffer voll.
-                // Einfach zurückkehren. Der Callback wird erneut aufgerufen,
-                // sobald der Writer wieder bereit ist.
-            }
-        }
-        
-        // ── Audio Samples kopieren ──
-        if let audioOutput = audioReaderOutput, let audioInput = audioWriterInput {
-            nonisolated(unsafe) let safeAudioInput = audioInput
-            nonisolated(unsafe) let safeAudioOutput = audioOutput
-            
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                safeAudioInput.requestMediaDataWhenReady(on: DispatchQueue(label: "audio.write")) {
-                    while safeAudioInput.isReadyForMoreMediaData {
-                        guard let sampleBuffer = safeAudioOutput.copyNextSampleBuffer() else {
-                            // Alle Audio-Samples wurden gelesen → fertig
-                            safeAudioInput.markAsFinished()
-                            continuation.resume()
-                            return
+        await withTaskGroup(of: Void.self) { group in
+            // Video-Task
+            group.addTask {
+                nonisolated(unsafe) let safeVideoInput = videoWriterInput
+                nonisolated(unsafe) let safeVideoOutput = videoReaderOutput
+                
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    safeVideoInput.requestMediaDataWhenReady(on: DispatchQueue(label: "video.write")) {
+                        while safeVideoInput.isReadyForMoreMediaData {
+                            guard let sampleBuffer = safeVideoOutput.copyNextSampleBuffer() else {
+                                safeVideoInput.markAsFinished()
+                                continuation.resume()
+                                return
+                            }
+                            safeVideoInput.append(sampleBuffer)
                         }
-                        safeAudioInput.append(sampleBuffer)
                     }
-                    // isReadyForMoreMediaData == false → Puffer voll.
-                    // Einfach zurückkehren. Der Callback wird erneut aufgerufen,
-                    // sobald der Writer wieder bereit ist.
+                }
+            }
+            
+            // Audio-Task
+            if let audioOutput = audioReaderOutput, let audioInput = audioWriterInput {
+                group.addTask {
+                    nonisolated(unsafe) let safeAudioInput = audioInput
+                    nonisolated(unsafe) let safeAudioOutput = audioOutput
+                    
+                    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                        safeAudioInput.requestMediaDataWhenReady(on: DispatchQueue(label: "audio.write")) {
+                            while safeAudioInput.isReadyForMoreMediaData {
+                                guard let sampleBuffer = safeAudioOutput.copyNextSampleBuffer() else {
+                                    safeAudioInput.markAsFinished()
+                                    continuation.resume()
+                                    return
+                                }
+                                safeAudioInput.append(sampleBuffer)
+                            }
+                        }
+                    }
                 }
             }
         }
