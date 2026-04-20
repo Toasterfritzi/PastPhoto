@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PastPhoto - Live Photo Creator</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="app-container">
+        <header>
+            <h1>PastPhoto</h1>
+            <p class="subtitle">Verwandle deine Videos in Apple Live Photos</p>
+        </header>
+
+        <main>
+            <div class="upload-section">
+                <div id="drop-zone" class="drop-zone">
+                    <div class="drop-zone-content">
+                        <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="17 8 12 3 7 8"></polyline>
+                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                        </svg>
+                        <p class="drop-text">Video hier ablegen oder <span>durchsuchen</span></p>
+                        <p class="file-hint">MP4, MOV, AVI (Max 100MB)</p>
+                    </div>
+                    <input type="file" id="file-input" accept="video/mp4,video/x-m4v,video/*" hidden>
+                </div>
+
+                <div class="settings-panel">
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <label for="experimental-toggle">Experimenteller Modus</label>
+                            <span class="setting-desc">Erlaubt Videos länger als 2.5 Sekunden</span>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="experimental-toggle">
+                            <span class="slider round"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <div id="upload-progress" class="progress-container hidden">
+                    <div class="progress-bar-bg">
+                        <div id="progress-bar" class="progress-bar-fill"></div>
+                    </div>
+                    <p id="progress-text">Wird verarbeitet...</p>
+                </div>
+                
+                <div id="result-container" class="result-container hidden">
+                    <div class="success-message">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                            <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                        </svg>
+                        <p>Erfolgreich konvertiert!</p>
+                    </div>
+                    <!-- Download options will be integrated later as requested -->
+                    <p class="download-info">Download für iPad wird noch implementiert.</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
