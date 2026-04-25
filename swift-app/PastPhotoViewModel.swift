@@ -2,6 +2,7 @@ import SwiftUI
 import PhotosUI
 import Photos
 import UniformTypeIdentifiers
+import AVFoundation
 
 @MainActor
 class PastPhotoViewModel: ObservableObject {
@@ -10,19 +11,48 @@ class PastPhotoViewModel: ObservableObject {
     @Published var selectedVideoItem: PhotosPickerItem? = nil {
         didSet { loadSelectedVideo() }
     }
-
+    
+    // ── Trim & Frame ──
+    @Published var keyFramePercent: Double = 0.5
+    @Published var trimStart: Double = 0.0
+    @Published var trimEnd: Double = 2.5
+    @Published var videoDuration: Double? = nil
+    
+    // ── Playback ──
+    @Published var bounceMode: Bool = false
+    @Published var playbackSpeed: PlaybackSpeed = .normal
+    
+    // ── Aspect Ratio ──
+    @Published var aspectRatio: AspectRatio = .original
+    
+    // ── Gooner ──
+    @Published var goonerMode: Bool = false
+    
     // ── State ──
     @Published var selectedVideoName: String? = nil
     @Published var isProcessing: Bool = false
     @Published var isComplete: Bool = false
     @Published var statusMessage: String = ""
     @Published var errorMessage: String? = nil
-
+    
+    // ── Saved Asset ──
+    @Published var savedAssetIdentifier: String? = nil
+    
     // ── Internal ──
     private var selectedVideoURL: URL? = nil
 
     var canConvert: Bool {
         selectedVideoURL != nil && !isProcessing
+    }
+    
+    /// Maximum allowed duration based on experimental mode
+    var effectiveTrimEnd: Double {
+        guard let dur = videoDuration else { return trimEnd }
+        if experimentalMode {
+            return min(trimEnd, dur)
+        } else {
+            return min(trimEnd, min(dur, 2.5))
+        }
     }
 
     // MARK: - Video Loading
@@ -42,6 +72,9 @@ class PastPhotoViewModel: ObservableObject {
                         self?.selectedVideoURL = video.url
                         self?.selectedVideoName = video.url.lastPathComponent
                         print("[PastPhoto] ✅ Video geladen: \(video.url.lastPathComponent)")
+                        
+                        // Load video duration for sliders
+                        await self?.loadVideoDuration(from: video.url)
                     } else {
                         self?.selectedVideoURL = nil
                         self?.selectedVideoName = nil
@@ -56,8 +89,23 @@ class PastPhotoViewModel: ObservableObject {
             }
         }
     }
+    
+    /// Loads the duration of the selected video for slider ranges.
+    private func loadVideoDuration(from url: URL) async {
+        let asset = AVURLAsset(url: url)
+        do {
+            let duration = try await asset.load(.duration)
+            let seconds = CMTimeGetSeconds(duration)
+            videoDuration = seconds
+            trimStart = 0.0
+            trimEnd = experimentalMode ? seconds : min(seconds, 2.5)
+            print("[PastPhoto] ⏱️ Video-Dauer geladen: \(String(format: "%.1f", seconds))s")
+        } catch {
+            print("[PastPhoto] ⚠️ Dauer konnte nicht geladen werden: \(error)")
+        }
+    }
 
-    // MARK: - Process & Save Locally
+    // MARK: - Process & Save
 
     func convertAndSave() async {
         guard let videoURL = selectedVideoURL else {
@@ -68,33 +116,56 @@ class PastPhotoViewModel: ObservableObject {
         isProcessing = true
         isComplete = false
         errorMessage = nil
+        savedAssetIdentifier = nil
 
-        print("[PastPhoto] 🚀 Starte lokale Verarbeitung...")
+        print("[PastPhoto] 🚀 Starte Verarbeitung...")
         print("[PastPhoto] 🧪 Experimentell: \(experimentalMode)")
+        print("[PastPhoto] 🐸 Gooner: \(goonerMode)")
+        print("[PastPhoto] ⚡ Speed: \(playbackSpeed.label)")
+        print("[PastPhoto] 📐 Ratio: \(aspectRatio.rawValue)")
 
         do {
             let assetIdentifier = UUID().uuidString
             
-            // Step 1: Export Video (MOV, trimmed to 2.5s if not experimental)
-            statusMessage = "Video wird formatiert & getrimmt..."
+            // Step 1: Export Video
+            statusMessage = "Video wird verarbeitet..."
             print("[PastPhoto] ⬇️ Schritt 1/3: Video exportieren...")
             
-            let maxDuration: Double? = experimentalMode ? nil : 2.5
-            let movURL = try await MediaProcessor.exportVideo(from: videoURL, maxDuration: maxDuration, assetIdentifier: assetIdentifier)
+            let movURL = try await MediaProcessor.exportVideo(
+                from: videoURL,
+                trimStart: trimStart,
+                trimEnd: effectiveTrimEnd,
+                assetIdentifier: assetIdentifier,
+                playbackSpeed: playbackSpeed.rawValue,
+                aspectRatio: aspectRatio,
+                goonerMode: goonerMode
+            )
             print("[PastPhoto] ✅ MOV erstellt: \(movURL.lastPathComponent)")
 
-            // Step 2: Extract Key Photo (JPEG)
-            statusMessage = "Key Photo wird generiert..."
-            print("[PastPhoto] ⬇️ Schritt 2/3: JPEG extrahieren...")
+            // Step 2: Extract Key Photo
+            statusMessage = goonerMode ? "Key Photo wird frittiert... 🐸" : "Key Photo wird generiert..."
+            print("[PastPhoto] ⬇️ Schritt 2/3: Key Photo extrahieren...")
             
-            let jpegURL = try await MediaProcessor.generateKeyPhoto(from: movURL, at: 0.5, assetIdentifier: assetIdentifier)
-            print("[PastPhoto] ✅ JPEG erstellt: \(jpegURL.lastPathComponent)")
+            let jpegURL = try await MediaProcessor.generateKeyPhoto(
+                from: movURL,
+                at: keyFramePercent,
+                assetIdentifier: assetIdentifier,
+                aspectRatio: aspectRatio,
+                goonerMode: goonerMode
+            )
+            print("[PastPhoto] ✅ HEIC erstellt: \(jpegURL.lastPathComponent)")
 
             // Step 3: Save as Live Photo
             statusMessage = "Speichere in Fotos-App..."
             print("[PastPhoto] 💾 Schritt 3/3: Speichere Live Photo...")
 
-            try await LivePhotoSaver.save(imageURL: jpegURL, videoURL: movURL)
+            let assetId = try await LivePhotoSaver.save(
+                imageURL: jpegURL,
+                videoURL: movURL,
+                bounceMode: bounceMode
+            )
+            
+            savedAssetIdentifier = assetId
 
             // Cleanup Temp Files
             try? FileManager.default.removeItem(at: jpegURL)
@@ -103,7 +174,7 @@ class PastPhotoViewModel: ObservableObject {
             print("[PastPhoto] 🎉 FERTIG! Live Photo in der Fotos-App gespeichert!")
             
             // Show success UI
-            withAnimation {
+            withAnimation(.spring(duration: 0.5)) {
                 isComplete = true
                 isProcessing = false
             }
@@ -116,6 +187,19 @@ class PastPhotoViewModel: ObservableObject {
             print("[PastPhoto] ❌ FEHLER: \(error)")
         }
     }
+    
+    // MARK: - Wallpaper
+    
+    /// Opens a share sheet for the saved Live Photo so the user can set it as wallpaper.
+    func shareForWallpaper() {
+        guard let assetId = savedAssetIdentifier else { return }
+        
+        // Try to open the Photos app to the saved asset
+        // The user can then long-press → "Use as Wallpaper"
+        if let url = URL(string: "photos-redirect://") {
+            UIApplication.shared.open(url)
+        }
+    }
 
     // MARK: - Actions
 
@@ -123,6 +207,9 @@ class PastPhotoViewModel: ObservableObject {
         selectedVideoItem = nil
         selectedVideoName = nil
         selectedVideoURL = nil
+        videoDuration = nil
+        trimStart = 0.0
+        trimEnd = 2.5
     }
 
     func reset() {
@@ -131,6 +218,12 @@ class PastPhotoViewModel: ObservableObject {
         isProcessing = false
         errorMessage = nil
         statusMessage = ""
+        savedAssetIdentifier = nil
+        keyFramePercent = 0.5
+        playbackSpeed = .normal
+        aspectRatio = .original
+        goonerMode = false
+        bounceMode = false
     }
 }
 

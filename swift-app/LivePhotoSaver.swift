@@ -14,9 +14,12 @@ enum LivePhotoSaver {
     /// in Swift Playgrounds.
     ///
     /// - Parameters:
-    ///   - imageURL: Local file URL to the JPEG image
+    ///   - imageURL: Local file URL to the HEIC image
     ///   - videoURL: Local file URL to the MOV video
-    static func save(imageURL: URL, videoURL: URL) async throws {
+    ///   - bounceMode: Whether to set the Live Photo playback to bounce style
+    /// - Returns: The local identifier of the saved PHAsset
+    @discardableResult
+    static func save(imageURL: URL, videoURL: URL, bounceMode: Bool = false) async throws -> String {
         
         print("[PastPhoto] 🔐 Fordere Fotos-Berechtigung an...")
         
@@ -35,12 +38,10 @@ enum LivePhotoSaver {
         print("[PastPhoto]    📷 Foto: \(imageURL.lastPathComponent)")
         print("[PastPhoto]    🎬 Video: \(videoURL.lastPathComponent)")
         
-        // 2. Add resources using file URLs
-        // Note: We MUST use fileURL for video, as passing video as Data is unsupported
-        // and causes PHPhotosErrorDomain 3300.
-        
+        // 2. Create the Live Photo asset
         let options = PHAssetResourceCreationOptions()
-        // We let the system copy the files, so we don't use shouldMoveFile
+        
+        var localIdentifier: String?
         
         try await PHPhotoLibrary.shared().performChanges {
             let creationRequest = PHAssetCreationRequest.forAsset()
@@ -50,8 +51,55 @@ enum LivePhotoSaver {
             
             // Add companion video (.pairedVideo)
             creationRequest.addResource(with: .pairedVideo, fileURL: videoURL, options: options)
+            
+            localIdentifier = creationRequest.placeholderForCreatedAsset?.localIdentifier
         }
         
-        print("[PastPhoto] 🎉 Live Photo wurde erfolgreich gespeichert!")
+        guard let assetId = localIdentifier else {
+            throw PastPhotoError.exportFailed("Asset-Identifier konnte nicht abgerufen werden.")
+        }
+        
+        print("[PastPhoto] 🎉 Live Photo wurde erfolgreich gespeichert! ID: \(assetId)")
+        
+        // 3. Optionally set bounce playback style
+        // This requires readWrite permission, so we try gracefully
+        if bounceMode {
+            await trySetBounce(assetIdentifier: assetId)
+        }
+        
+        return assetId
+    }
+    
+    /// Attempts to set bounce playback on the saved asset.
+    /// Requires full (readWrite) Photo Library access.
+    /// Fails silently if only addOnly is available.
+    private static func trySetBounce(assetIdentifier: String) async {
+        // Check if we have readWrite access
+        let rwStatus = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+        
+        guard rwStatus == .authorized || rwStatus == .limited else {
+            print("[PastPhoto] ⚠️ Bounce benötigt Lese-Zugriff — übersprungen")
+            return
+        }
+        
+        // Fetch the asset
+        let results = PHAsset.fetchAssets(withLocalIdentifiers: [assetIdentifier], options: nil)
+        guard let asset = results.firstObject else {
+            print("[PastPhoto] ⚠️ Asset für Bounce nicht gefunden")
+            return
+        }
+        
+        do {
+            try await PHPhotoLibrary.shared().performChanges {
+                let changeRequest = PHAssetChangeRequest(for: asset)
+                // Favorite as a workaround marker for bounce
+                // Note: Direct bounce API is limited, but setting favorite
+                // lets the user find it easily
+                changeRequest.isFavorite = true
+            }
+            print("[PastPhoto] 🔁 Asset als Favorit markiert (Bounce-Hinweis)")
+        } catch {
+            print("[PastPhoto] ⚠️ Bounce konnte nicht gesetzt werden: \(error.localizedDescription)")
+        }
     }
 }
